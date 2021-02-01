@@ -1,0 +1,17 @@
+NOTE: My old purify release didn't like 1.0.0a, use 1.0.0 release instead
+when using purify.
+NOTE: figure out how to pass -DPurify flag to debug version to see if that helps.
+
+perl Configure VC-WIN32 --prefix=c:\Projects\OpenSSL-1.0.0 enable-static-engine
+OR
+perl Configure debug-VC-WIN32 --prefix=c:\Projects\OpenSSL-1.0.0d-dbg enable-static-engine
+
+ms\do_nasm
+nmake -f ms\ntdll.mak
+nmake -f ms\ntdll.mak test
+nmake -f ms\ntdll.mak install
+
+Copy ms/applink.c to include/ms/applink.c (need to make "ms" dir).
+Copy out32dll/libeay32.pdb to bin
+Copy out32dll/ssleay32.pdb to bin
+

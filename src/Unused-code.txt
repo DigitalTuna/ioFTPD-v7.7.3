@@ -1,0 +1,130 @@
+#if 0
+// The behavior of WSAAccept with CONDITIONAL_ACCEPT changed such that
+// it's impossible to stealth the port anymore
+int CALLBACK
+DoAcceptTest(LPWSABUF lpCallerId, LPWSABUF lpCallerData,
+			 LPQOS lpSQOS, LPQOS lpGQOS, LPWSABUF lpCalleeId,
+			 LPWSABUF lpCalleeData, GROUP *g, DWORD_PTR dwCallbackData)
+{
+	LPNEWCLIENT lpNC;
+	LPHOSTINFO  lpHostInfo;
+	struct      sockaddr_in *SockIn;
+
+	lpNC = (LPNEWCLIENT) dwCallbackData;
+	SockIn = (struct sockaddr_in *) lpCallerId->buf;
+	*lpNC->lpRemoteSockAddress = *SockIn;
+
+	if (!lpNC->bNeedAccept && !lpNC->lpHostInfo)
+	{
+		lpHostInfo	= (LPHOSTINFO)RegisterNetworkAddress(
+			(PBYTE)&lpNC->lpRemoteSockAddress->sin_addr.s_addr,
+			sizeof(lpNC->lpRemoteSockAddress->sin_addr.s_addr));
+		lpNC->lpHostInfo = lpHostInfo;
+	}
+	lpHostInfo = lpNC->lpHostInfo;
+
+	if (!bRejectUnknownIps)
+	{
+		return CF_ACCEPT;
+	}
+
+	if (lpHostInfo && lpHostInfo->szHostName)
+	{
+		if (UserIpMaskKnown(lpHostInfo->szHostName, &SockIn->sin_addr))
+		{
+			return CF_ACCEPT;
+		}
+		if (lpNC->bNeedAccept || Time_DifferenceDW32(lpHostInfo->dwHostNameCacheTime, GetTickCount()) < dwHostNameCache)
+		{
+			// the cached hostname is valid or we aleady been here once so we can reject the connection
+			Putlog(LOG_ERROR, _TEXT("Rejected unmatched client from %s.\r\n"), inet_ntoa(SockIn->sin_addr));
+
+			return CF_REJECT;
+		}
+		// we need to update the cache
+	}
+	else if (lpNC->bNeedAccept)
+	{
+		// hostname couldn't be resolved and we already tested just the IP first time
+		Putlog(LOG_ERROR, _TEXT("Rejected unmatched client from %s.\r\n"), inet_ntoa(SockIn->sin_addr));
+		return CF_REJECT;
+	}
+	if (UserIpMaskKnown(_T(""), &SockIn->sin_addr))
+	{
+		// we haven't resolved the hostname yet, but the IP is known
+		return CF_ACCEPT;
+	}
+
+	// we need to call WSAAccept again after resolving hostname
+	lpNC->bNeedAccept = TRUE;
+	return CF_DEFER;
+}
+
+
+LRESULT Service_Accept(WPARAM wParam, LPARAM lParam)
+{
+	LPIOSERVICE		lpService;
+	LPNEWCLIENT		lpClient;
+	INT32           iSize;
+	SOCKET          Socket;
+
+	Socket = (SOCKET) wParam;
+
+	//	Allocate memory
+	lpClient	= (LPNEWCLIENT)Allocate("Service:Accept:Socket", sizeof(NEWCLIENT)+2*sizeof(struct sockaddr_in));
+	if (! lpClient) return TRUE;
+	ZeroMemory(lpClient, sizeof(NEWCLIENT));
+
+	// need to get service from wParam which is socket
+	AcquireSharedLock(&loServiceList);
+	for (lpService = lpServiceList ; lpService ; lpService = lpService->lpNext)
+	{
+		if (lpService->Socket == Socket)
+		{
+			break;
+		}
+	}
+	ReleaseSharedLock(&loServiceList);
+
+	//	Update structure
+	lpClient->lpService	= lpService;
+	lpClient->lpLocalSockAddress  = (struct sockaddr_in *) ((PCHAR) lpClient + sizeof(NEWCLIENT));
+	lpClient->lpRemoteSockAddress = (struct sockaddr_in *) ((PCHAR) lpClient + sizeof(NEWCLIENT) + sizeof(struct sockaddr_in));
+
+	iSize = sizeof(*lpClient->lpRemoteSockAddress);
+	lpClient->Socket = WSAAccept(Socket, (struct sockaddr *) lpClient->lpRemoteSockAddress, &iSize,
+		DoAcceptTest, (DWORD_PTR) lpClient);
+	if (lpClient->Socket == INVALID_SOCKET && WSAGetLastError() != WSATRY_AGAIN)
+	{
+		Free(lpClient);
+		return TRUE;
+	}
+	if (!lpService)
+	{
+		closesocket(Socket);
+		Free(lpClient);
+		return TRUE;
+	}
+	QueueJob(IdentifyClient, lpClient, JOB_PRIORITY_HIGH);
+	return FALSE;
+}
+
+
+VOID
+Service_ReAccept(VOID *lpNewClient)
+{
+	LPNEWCLIENT lpClient;
+	INT iSize;
+
+	lpClient = (LPNEWCLIENT) lpNewClient;
+
+	iSize = sizeof(*lpClient->lpRemoteSockAddress);
+	lpClient->Socket = 	WSAAccept(lpClient->lpService->Socket,
+		(struct sockaddr *) lpClient->lpRemoteSockAddress, &iSize, DoAcceptTest, (DWORD_PTR) lpClient);
+	if (lpClient->Socket != INVALID_SOCKET)
+	{
+		iSize = sizeof(*lpClient->lpLocalSockAddress);
+		getsockname(lpClient->Socket, (struct sockaddr *) lpClient->lpLocalSockAddress, &iSize);
+	}
+	lpClient->bNeedAccept = FALSE;
+}

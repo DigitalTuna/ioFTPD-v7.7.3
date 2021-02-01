@@ -1,0 +1,161 @@
+Notes on building TCL for ioFTPD:
+
+The v7.1.0+ releases now modifies the actual TCL libraries slightly...
+
+#1: Add new function to list of exported dll functions...
+
+Edit generic/tcl.decls to append a new item under "Windows specific functions":
+  declare 2 win {
+      void Tcl_RegisterHandleLockFunctions(void (*AcquireLock)(void), void (*ReleaseLock)(void))
+  }
+
+In theory after the above edit we can compile everything to get tclsh, then
+use nmake genstubs to build the new header files, clean, and rebuild.  However
+the genstubs tool doesn't parse the function arguments (the parens confuse
+it) so we'll just do things manually.  That means the above edit really didn't
+do anything, but it does make it clear we added the feature...
+
+Edit generic/TclPlatDecls.h, you'll see where these edits go:
+  #ifndef Tcl_RegisterHandleFunctions_TCL_DECLARED
+  #define Tcl_RegisterHandleFunctions_TCL_DECLARED
+  /* 2 */
+  EXTERN void         Tcl_RegisterHandleLockFunctions(void (*AcquireLock)(void), void (*ReleaseLock)(void));
+  #endif
+  ...
+      void (*tcl_RegisterHandleLockFunctions) (void (*AcquireLock)(void), void (*ReleaseLock)(void)); /* 2 */
+  ...
+  #ifndef Tcl_RegisterHandleFunctions
+  #define Tcl_RegisterHandleFunctions \
+	  (tclPlatStubsPtr->tcl_RegisterHandleFunctions) /* 2 */
+  #endif
+
+
+#2: Edit win/makefile.vc
+
+We want to modify the debug builds to pass the "-D PURIFY" flag so tcl uses
+malloc/free and doesn't do it's own internal memory management which will
+allow purify to do it's job.
+
+cwarn = $(WARNINGS) -D _CRT_SECURE_NO_DEPRECATE -D _CRT_NONSTDC_NO_DEPRECATE
+!if $(SYMBOLS)
+COMPILERFLAGS  = $(COMPILERFLAGSS) -D PURIFY
+!endif
+cflags = -nologo -c $(COMPILERFLAGS) $(cwarn) -Fp$(TMP_DIR)^\
+
+
+#3: Edit win/tclWinInt.h
+
+Near end:
+>> #endif /* TCL_THREADS */
+
+MODULE_SCOPE void   TclAcquireHandleLock(void);
+MODULE_SCOPE void   TclReleaseHandleLock(void);
+
+>> /* Needed by tclWinFile.c and tclWinFCmd.c */
+
+
+#4: Edit win/tclWinPipe.c
+
+:: Before PipeInit()...
+static void (*AcquireHandleLockFunc)(void);
+static void (*ReleaseHandleLockFunc)(void);
+
+void TclAcquireHandleLock(void)
+{
+	if (AcquireHandleLockFunc) (*AcquireHandleLockFunc)();
+}
+
+void TclReleaseHandleLock(void)
+{
+	if (ReleaseHandleLockFunc) (*ReleaseHandleLockFunc)();
+}
+
+void Tcl_RegisterHandleLockFunctions(void (*AcquireLock)(void), void (*ReleaseLock)(void))
+{
+	AcquireHandleLockFunc = AcquireLock;
+	ReleaseHandleLockFunc = ReleaseLock;
+}
+
+:: To TclpCreateProcess()
+>>    */
+
+	TclAcquireHandleLock();
+
+>>    if (inputHandle == INVALID_HANDLE_VALUE) {
+...
+>>	Tcl_AppendResult(interp, "couldn't duplicate input handle: ",
+>>		Tcl_PosixError(interp), (char *) NULL);
+	TclReleaseHandleLock();
+>>	goto end;
+...
+>>	Tcl_AppendResult(interp, "couldn't duplicate output handle: ",
+>>		Tcl_PosixError(interp), (char *) NULL);
+	TclReleaseHandleLock();
+>>	goto end;
+...
+>>	Tcl_AppendResult(interp, "couldn't duplicate error handle: ",
+>>		Tcl_PosixError(interp), (char *) NULL);
+	TclReleaseHandleLock();
+>>	goto end;
+...
+>>		Tcl_DecrRefCount(tclExePtr);
+>>		Tcl_DStringFree(&pipeDll);
+		TclReleaseHandleLock();
+>>		goto end;
+...
+>>		Tcl_DecrRefCount(pipeDllPtr);
+>>		Tcl_DStringFree(&pipeDll);
+		TclReleaseHandleLock();
+>>		goto end;
+...
+>>	Tcl_AppendResult(interp, "couldn't execute \"", argv[0],
+>>		"\": ", Tcl_PosixError(interp), (char *) NULL);
+        TclReleaseHandleLock();
+>>	goto end;
+>>   }
+
+     // now make the handles uninherittable and release the handle lock
+     SetHandleInformation(startInfo.hStdInput, HANDLE_FLAG_INHERIT, 0);
+     SetHandleInformation(startInfo.hStdOutput, HANDLE_FLAG_INHERIT, 0);
+     SetHandleInformation(startInfo.hStdError, HANDLE_FLAG_INHERIT, 0);
+     TclReleaseHandleLock();
+
+
+#5: Edit win/TclWinSock.c
+
+:: Edit TcpAccept()
+>>  len = sizeof(SOCKADDR_IN);
+
+    TclAcquireHandleLock();
+
+>>  newSocket = accept(infoPtr->socket, (SOCKADDR *)&addr,
+...
+>>	infoPtr->readyEvents &= ~(FD_ACCEPT);
+	TclReleaseHandleLock();
+>>	return;
+...
+>>  SetHandleInformation((HANDLE) newSocket, HANDLE_FLAG_INHERIT, 0);
+    TclReleaseHandleLock();
+
+
+#6: Build release and debug versions
+
+Open up a Visual Studio command prompt.
+Goto the /win dir
+Build debug version
+Run: nmake -f makefile.vc OPTS=threads,symbols INSTALLDIR=c:\Projects\tcl-v8.5.9 release
+Run: nmake -f makefile.vc OPTS=threads,symbols INSTALLDIR=c:\Projects\tcl-v8.5.9 install
+
+Build release version
+Run: nmake -f makefile.vc OPTS=threads,pdbs INSTALLDIR=c:\Projects\tcl-v8.5.9 release
+Run: nmake -f makefile.vc OPTS=threads,pdbs INSTALLDIR=c:\Projects\tcl-v8.5.9 install
+
+#7: Copy over to installed bin dir:
+  Debug_VC9\tcl85tg.pdb
+  Release_VC9\tcl85t.pdb
+
+
+#8: Copy over the new dll/pdb's to system dir
+    Copy over the new /lib dir
+    Remove the lib/tcl8.5/encoding dir...
+
