@@ -1,0 +1,48 @@
+Install Visual Studio 2019 Community : https://docs.microsoft.com/en-us/visualstudio/releases/2019/release-notes
+
+
+Install Activeperl : https://platform.activestate.com/quarks/ActivePerl-5.28/distributions?commitID=f6b2d85c-0592-4e75-ad38-f28e84cd74d1
+
+
+Download and extract : https://www.nasm.us/pub/nasm/releasebuilds/2.15.05/win32/nasm-2.15.05-win32.zip
+
+
+Extract NASM into : C:\Dev\Tools\
+
+
+Download and extract OpenSSL 1.1.1 sources : https://www.openssl.org/source/openssl-1.1.1k.tar.gz
+
+
+Extract OpenSSL 1.1.1k into C:\Dev\Sources\
+
+Open x86 Native Tools Command Prompt for VS 2019
+
+Compiling OpenSSL 1.1.1k x86 Shared
+type in : 
+```
+path=C:\Dev\Tools\nasm-2.15.05;%PATH%
+cd C:\Dev\Sources\openssl-1.1.1k
+perl Configure VC-WIN32 --prefix=C:\Dev\Libs\VS2019\x86\OpenSSL\Shared\Release shared
+nmake
+nmake install
+```
+
+still in the x86 Native Tools Command Prompt for VS 2019
+```
+cd c:\Dev\Sources\
+git clone https://github.com/ioFTPD/TCL8.5.git
+cd c:\Dev\Sources\TCL8.5\win
+nmake -f makefile.vc OPTS=threads,pdbs INSTALLDIR=C:\Dev\Libs\VS2019\x86\TCL\Shared\Release release
+nmake -f makefile.vc OPTS=threads,pdbs INSTALLDIR=C:\Dev\Libs\VS2019\x86\TCL\Shared\Release install
+```
+
+Clone the ioFTPD sources into c:\Dev\Sources
+```
+git clone https://github.com/ioFTPD/ioFTPD.git
+```
+double click on c:\Dev\Sources\ioFTPD\ioFTPD-v7.sln
+On Visual Studio Choose configuration as "Purify" and "Win32".
+
+Right click on ioFTPD-v7 solution and choose Build.
+
+The compiled binaries should be located in c:\ioFTPD\system
